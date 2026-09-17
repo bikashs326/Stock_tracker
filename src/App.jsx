@@ -3,6 +3,129 @@ import { supabase } from './supabaseClient'
 import AuthPage from './AuthPage'
 import { extractProductName, extractLabelInfo } from './geminiService'
 
+// ── Default categories ────────────────────────────────────────────────────────
+const DEFAULT_CATEGORIES = [
+  'Seeds', 'Pesticides', 'Hormones',
+  'Dairy', 'Snacks', 'Medicine',
+  'Fruits & Vegetables', 'Beverages',
+  'Personal Care', 'Household', 'Grains & Pulses',
+  'Frozen Foods', 'Bakery', 'Meat & Fish',
+]
+
+// ── CategoryInput with autocomplete ──────────────────────────────────────────
+function CategoryInput({ value, onChange, allCategories }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState(value || '')
+  const wrapperRef = useRef(null)
+
+  // Merge defaults + user categories (deduplicated)
+  const combined = [...new Set([...DEFAULT_CATEGORIES, ...allCategories])]
+
+  const suggestions = query.trim()
+    ? combined.filter(c => c.toLowerCase().includes(query.toLowerCase()))
+    : combined
+
+  // New category: typed value not in list
+  const isNew = query.trim() && !combined.some(c => c.toLowerCase() === query.trim().toLowerCase())
+
+  useEffect(() => {
+    const handleClick = (e) => { if (!wrapperRef.current?.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  const select = (cat) => {
+    setQuery(cat)
+    onChange(cat)
+    setOpen(false)
+  }
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <div className="relative">
+        <input
+          id="product-category"
+          type="text"
+          value={query}
+          onChange={e => { setQuery(e.target.value); onChange(e.target.value); setOpen(true) }}
+          onFocus={() => setOpen(true)}
+          placeholder="Select or type a category…"
+          autoComplete="off"
+          className="w-full rounded-xl bg-slate-800/60 border border-slate-700/50 px-4 py-3 pr-10 text-sm text-white placeholder-slate-500 transition-all focus:border-indigo-500/50 focus:ring-2 focus:ring-indigo-500/50"
+        />
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
+        >
+          <svg className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+      </div>
+
+      {open && (
+        <div className="absolute z-50 w-full mt-1.5 rounded-xl bg-slate-900 border border-slate-700/60 shadow-2xl overflow-hidden animate-fade-in">
+          <div className="max-h-52 overflow-y-auto">
+            {/* Create new category option */}
+            {isNew && (
+              <button
+                type="button"
+                onClick={() => select(query.trim())}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-indigo-400 hover:bg-indigo-500/10 transition-colors text-left border-b border-slate-700/40"
+              >
+                <span className="w-5 h-5 rounded-full bg-indigo-500/20 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                  </svg>
+                </span>
+                Create &ldquo;{query.trim()}&rdquo;
+              </button>
+            )}
+
+            {suggestions.length === 0 && !isNew && (
+              <p className="px-3.5 py-3 text-sm text-slate-500 text-center">No matches found</p>
+            )}
+
+            {suggestions.map(cat => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => select(cat)}
+                className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm transition-colors text-left ${
+                  value === cat
+                    ? 'bg-indigo-600/20 text-indigo-300'
+                    : 'text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <span className="text-base">{getCategoryEmoji(cat)}</span>
+                {cat}
+                {value === cat && (
+                  <svg className="w-3.5 h-3.5 ml-auto text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function getCategoryEmoji(cat) {
+  const map = {
+    'Seeds': '🌱', 'Pesticides': '🧪', 'Hormones': '💊',
+    'Dairy': '🥛', 'Snacks': '🍿', 'Medicine': '💊',
+    'Fruits & Vegetables': '🥦', 'Beverages': '🧃',
+    'Personal Care': '🧴', 'Household': '🏠',
+    'Grains & Pulses': '🌾', 'Frozen Foods': '🧊',
+    'Bakery': '🍞', 'Meat & Fish': '🥩',
+  }
+  return map[cat] || '📦'
+}
+
 // ── Urgency helpers ───────────────────────────────────────────────────────────
 const URGENCY_LEVELS = {
   EXPIRED:  { color: 'from-red-900/50 to-red-800/30',       badge: 'bg-red-500/20 text-red-300 border-red-500/40',      dot: 'bg-red-500',    glow: true  },
@@ -145,7 +268,7 @@ function StepIndicator({ current, steps }) {
 }
 
 // ── AddProductForm with two-photo AI flow ─────────────────────────────────────
-function AddProductForm({ onAdd }) {
+function AddProductForm({ onAdd, allCategories = [] }) {
   const STEPS = ['Product Photo', 'Label Photo', 'Review & Save']
   const [step, setStep] = useState(0)
 
@@ -392,9 +515,10 @@ function AddProductForm({ onAdd }) {
             {/* Category */}
             <div className="space-y-1.5">
               <label htmlFor="product-category" className="block text-xs font-medium text-slate-400 uppercase tracking-wider">Category</label>
-              <input id="product-category" type="text" value={category} onChange={e => setCategory(e.target.value)}
-                placeholder="e.g. Dairy, Snacks, Medicine…"
-                className="w-full rounded-xl bg-slate-800/60 border border-slate-700/50 px-4 py-3 text-sm text-white placeholder-slate-500 transition-all focus:border-indigo-500/50 focus:ring-2 focus:ring-indigo-500/50"
+              <CategoryInput
+                value={category}
+                onChange={setCategory}
+                allCategories={allCategories}
               />
             </div>
 
@@ -619,7 +743,7 @@ export default function App() {
       </header>
 
       <main className="max-w-lg mx-auto px-4 pt-5 space-y-5">
-        {activeTab === 'form' && <AddProductForm onAdd={handleAdd} />}
+        {activeTab === 'form' && <AddProductForm onAdd={handleAdd} allCategories={[...new Set(products.map(p => p.category).filter(Boolean))]} />}
 
         {activeTab === 'list' && (
           <>
